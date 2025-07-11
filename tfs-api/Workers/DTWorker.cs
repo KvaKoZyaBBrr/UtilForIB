@@ -1,0 +1,127 @@
+using System.Diagnostics;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
+using Configuration;
+
+namespace Workers;
+
+public class DTWorker(
+    DtConfiguration configuration,
+        string repoName,
+        string branchName
+): IWorker
+{
+    public async Task<bool> ProcessAsync(string slnPath, CancellationToken cancellation)
+    {
+        var fullSbomPath = GetSbomPath(configuration.SbomPath, branchName);
+        var sbomGeneraion = GenerateSbom(slnPath, fullSbomPath);
+        var projectUid = await CreateOrGetProject(cancellation);
+        await sbomGeneraion;
+        await SendSBOM(fullSbomPath, projectUid, cancellation);
+        return true;
+    }
+
+    private  async Task SendSBOM(string sbomPath, string projectUuid, CancellationToken cancellation)
+    {
+        Console.WriteLine("Отправка проекта...");
+        using (var httpClient = new HttpClient())
+        {
+            using var file = File.OpenRead(Path.Combine(sbomPath, "bom.xml"));
+            using var reader = new StreamReader(file);
+            var sbom = await reader.ReadToEndAsync(cancellation);
+            var plainTextBytes = System.Text.Encoding.UTF8.GetBytes(sbom);
+            var sbomBase64String = System.Convert.ToBase64String(plainTextBytes);
+
+            httpClient.DefaultRequestHeaders.Add("X-Api-Key", configuration.Token);
+            var request = $@"{{
+  ""project"": ""{projectUuid}"",
+  ""bom"": ""{sbomBase64String}""
+}}";
+
+            var content = new StringContent(request);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            var response = await httpClient.PutAsync($"{configuration.Url.AbsoluteUri}api/v1/bom", content, cancellation);
+        }
+        Console.WriteLine("Проект отправлен");
+    }
+
+    private async Task<string> CreateOrGetProject(CancellationToken cancellation)
+    {
+        Console.WriteLine("Получение ID проекта");
+        var projectName = repoName + "/" + branchName;
+        using (var httpClient = new HttpClient())
+        {
+            httpClient.DefaultRequestHeaders.Add("X-Api-Key", configuration.Token);
+
+            var projectsResponse = await httpClient.GetAsync($"{configuration.Url.AbsoluteUri}api/v1/project?pageNumber=-1&pageSize=-1");
+            var data = await projectsResponse.Content.ReadFromJsonAsync<List<Dictionary<string, object>>>(cancellation);
+            var item = data!.FirstOrDefault(x => x["name"] is JsonElement element && element.Deserialize<string>() == projectName);
+            if (item != null)
+                return ((JsonElement)item!["uuid"]).Deserialize<string>()!;
+
+            Console.WriteLine("Проект не найден. Создание...");
+            var request = $@"{{
+            ""name"":""{projectName}"",
+            ""description"": ""{repoName}"",
+            ""version"": ""{branchName}"",
+            ""active"": true,
+            ""isLatest"": true
+        }}";
+
+            var content = new StringContent(request);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            var response = await httpClient.PutAsync($"{configuration.Url.AbsoluteUri}api/v1/project", content, cancellation);
+            var createdResponse = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>(cancellation);
+            Console.WriteLine("Проект создан");
+            return ((JsonElement)createdResponse!["uuid"]).Deserialize<string>()!;
+        }
+    }
+
+
+    private string GetSbomPath(string sbomPath, string branchName)
+    {
+        var originPath = Path.Combine(sbomPath, branchName);
+        var resultPath = originPath;
+        var repeatIndex = 1;
+        while (Directory.Exists(resultPath))
+        {
+            resultPath = $"{originPath}({repeatIndex})";
+            repeatIndex++;
+        }
+        return resultPath;
+    }
+
+    private async Task GenerateSbom(string slnPath, string outPath)
+    {
+        Console.WriteLine("Генерация sbom...");
+        var processInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet-CycloneDX.exe",
+            Arguments = $"{slnPath} -o {outPath}",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using (var process = new Process { StartInfo = processInfo })
+        {
+            process.Start();
+            string output = process.StandardOutput.ReadToEnd();
+            string error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Console.WriteLine(output);
+
+            if (process.ExitCode != 0)
+            {
+                Console.WriteLine("Ошибки сборки:");
+                Console.WriteLine(error);
+                throw new Exception($"Сборка завершилась с ошибкой (код: {process.ExitCode})");
+            }
+        }
+        Console.WriteLine("Генерация sbom завершена");
+        await Task.CompletedTask;
+    }
+}
