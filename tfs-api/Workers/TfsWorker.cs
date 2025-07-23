@@ -12,15 +12,15 @@ public class TfsWorker(
         string branchName
     ) : IWorker
 {
-    string _targetPath;
-    public string SlnPath { get; private set; } = null;
+    string? _targetPath;
+    public string[] SlnPaths { get; private set; } = [];
     public async Task<bool> ProcessAsync(string data, CancellationToken cancellation)
     {
         _targetPath = data;
 
         if (await LoadRepositoryToTargetPath(cancellation))
         {
-            SlnPath = FindSolutionOrProjectFile();
+            SlnPaths = FindSolutionOrProjectFiles();
             return true;
         }
 
@@ -60,23 +60,23 @@ public class TfsWorker(
         }
 
         Console.WriteLine("Распаковка проекта...");
-        ZipFile.ExtractToDirectory(configuration.ZipName, _targetPath);
+        ZipFile.ExtractToDirectory(configuration.ZipName, _targetPath!);
         File.Delete(configuration.ZipName);
         Console.WriteLine("Проект загружен");
     }
 
-    private string FindSolutionOrProjectFile()
+    private string[] FindSolutionOrProjectFiles()
     {
         // Ищем файл .sln
-        var slnFiles = Directory.GetFiles(_targetPath, "*.sln", SearchOption.AllDirectories);
+        var slnFiles = Directory.GetFiles(_targetPath!, "*.sln", SearchOption.AllDirectories);
         if (slnFiles.Length > 0)
-            return slnFiles[0];
+            return slnFiles;
 
         // Если .sln нет, ищем .csproj
-        var csprojFiles = Directory.GetFiles(_targetPath, "*.csproj", SearchOption.AllDirectories);
+        var csprojFiles = Directory.GetFiles(_targetPath!, "*.csproj", SearchOption.AllDirectories);
         if (csprojFiles.Length > 0)
-            return csprojFiles[0];
+            return csprojFiles;
 
-        return null;
+        return [];
     }
 }

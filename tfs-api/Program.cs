@@ -3,9 +3,9 @@ using Workers;
 using Configuration;
 
 // аргументы консоли
-string repoName = "eos-storage";
-string branchName = "issues/#127212_dev";
-string slnPath = "";
+string repoName = "";
+string branchName = "";
+string[] slnPaths = [];
 foreach (var arg in args)
 {
     var vals = arg.Split("=");
@@ -19,7 +19,7 @@ foreach (var arg in args)
                 help - this message
                 repo <repository name> - reposytory name
                 branch <branch name> - branch name
-                slnPath <path to .sln> - path to solution. If this is filled - tfs operation was skiped
+                slnPaths <paths to .sln>[,<<paths to .sln>>] - paths to solution. If this is filled - tfs operation was skiped
                 another configs in appsettings.json");
                 return;
             }
@@ -33,9 +33,9 @@ foreach (var arg in args)
                 branchName = vals[1];
                 break;
             }
-        case "slnPath":
+        case "slnPaths":
             {
-                slnPath = vals[1];
+                slnPaths = vals[1].Split(",");
                 break;
             }
         default:
@@ -43,7 +43,7 @@ foreach (var arg in args)
     }
 }
 
-var slnPathIsFilled = !string.IsNullOrEmpty(slnPath);
+var slnPathIsFilled = slnPaths.Any();
 var branchFilled = !string.IsNullOrEmpty(repoName) && !string.IsNullOrEmpty(branchName);
 
 if (!slnPathIsFilled && !branchFilled)
@@ -69,17 +69,21 @@ try
     {
         var tfsWorker = new TfsWorker(config.Tfs, repoName, branchName);
         await tfsWorker.ProcessAsync(tempDir, token);
-        slnPath = tfsWorker.SlnPath;
+        slnPaths = tfsWorker.SlnPaths;
     }
-    Console.WriteLine("Анализ проекта");
-    if (slnPathIsFilled)
+    Console.WriteLine("Анализ ...");
+    foreach (var slnPath in slnPaths)
     {
-        repoName = Path.GetFileNameWithoutExtension(slnPath)!;
-        branchName = repoName;
+        Console.WriteLine($"Анализ проекта {slnPath}");
+        var projectName = Path.GetFileNameWithoutExtension(slnPath)!;
+        if (string.IsNullOrEmpty(branchName))
+            branchName = "manual";
+        var dtWorker = new DTWorker(config.Dt, projectName, branchName);
+
+        await dtWorker.ProcessAsync(slnPath, token);
+        Console.WriteLine("Анализ проекта завершен");
     }
-    var dtWorker = new DTWorker(config.Dt, repoName, branchName);
-    await dtWorker.ProcessAsync(slnPath, token);
-    Console.WriteLine("Анализ проекта завершен");
+    Console.WriteLine("Анализ завершен");
 }
 finally
 {
