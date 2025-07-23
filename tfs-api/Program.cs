@@ -80,8 +80,15 @@ try
             branchName = "manual";
         var dtWorker = new DTWorker(config.Dt, projectName, branchName);
 
-        await dtWorker.ProcessAsync(slnPath, token);
-        Console.WriteLine("Анализ проекта завершен");
+        try
+        {
+            await dtWorker.ProcessAsync(slnPath, token);
+            Console.WriteLine("Анализ проекта завершен");
+        }
+        catch (Exception ex)
+        { 
+            Console.WriteLine(ex.Message);
+        }        
     }
     Console.WriteLine("Анализ завершен");
 }
